@@ -2,7 +2,7 @@
 # ENHANCED FINITE MIXTURE MODEL (FMM) CLUSTERING
 # =============================================================================
 # Author : Enhanced Analysis Pipeline
-# Created: 2024
+# Created: 2025
 # Purpose: Identify and characterize distinct subpopulations in CMML using 
 #          Finite Mixture Models (FMM) based on baseline NGS, clinical, and 
 #          cytogenetics, and key clinical outcomes. (NO trajectory analysis)
@@ -15,7 +15,9 @@
 # - Visualizations: BIC/AIC plots, class membership, density plots, heatmaps, proximity graph for cluster, charecters per cluster like: baseline blood counts, cytogenetics, subtype, and progression
 # - Cluster summary table: clinical/molecular features by class
 # - Survival analysis of FMM clusters
-
+# - Silhouette plot for cluster validation
+# - Save all outputs to CSV and images
+# - Comprehensive summary and recommendations at the end
 # =============================================================================
 # SECTION 1: SETUP AND CONFIGURATION
 # =============================================================================
@@ -32,7 +34,7 @@ for (pkg in required_packages) {
   library(pkg, character.only = TRUE)
 }
 
-message("=== ENHANCED FMM CLUSTERING WITHOUT TRAJECTORY ANALYSIS ===")
+message("=== ENHANCED FMM CLUSTERING ===")
 
 # =============================================================================
 # SECTION 2: DATA LOADING AND PREPARATION
@@ -40,14 +42,12 @@ message("=== ENHANCED FMM CLUSTERING WITHOUT TRAJECTORY ANALYSIS ===")
 
 clinical_file <- "Sheet1.csv"
 mutation_file <- "CMML_Project_2.csv"
-
 df_clinical <- fread(clinical_file, stringsAsFactors = FALSE)
 df_ngs <- fread(mutation_file, stringsAsFactors = FALSE)
 
 # Ensure MRN is available and mergeable
 df_clinical$MRN <- as.character(df_clinical$MRN)
 df_ngs$MRN <- as.character(df_ngs$MRN)
-
 makedata <- function(D){
   Df <- data.frame(D,check.names = FALSE)
   nr=nrow(Df);nc=ncol(Df)
@@ -57,7 +57,7 @@ makedata <- function(D){
   if(length(which(r==nc))){Df <- Df[-which(r==nc),]}
   if(length(which(c==nr))){Df <- Df[,-which(c==nr)]}
   return(Df)
-  }
+}
 
 df_clinical <- makedata(df_clinical)
 df_ngs <- makedata(df_ngs)
@@ -73,8 +73,8 @@ clean_numeric <- function(x) {
   suppressWarnings(as.numeric(x))
 }
 clean_data <- function(df){df=data.frame(df,check.names = FALSE);x=colnames(df)
-  for(i in x){if(is.character(df[[i]])==TRUE){df[[i]] <- parse_number(df[[i]]);df[[i]] <- as.numeric(gsub("[^0-9.]", "", df[[i]]))}}
-  return(df)}
+for(i in x){if(is.character(df[[i]])==TRUE){df[[i]] <- parse_number(df[[i]]);df[[i]] <- as.numeric(gsub("[^0-9.]", "", df[[i]]))}}
+return(df)}
 
 # 3.1 Baseline NGS features (NGS_1) - ONLY presence/absence, EXCLUDE VAF, type, NM, position
 ngs1_cols_all <- grep("^NGS_1[A-Z0-9]+", names(df), value = TRUE) # all NGS_1 columns
@@ -90,8 +90,8 @@ mutation_matrix[] <- lapply(mutation_matrix, clean_numeric)
 # 1 = mutated, 0 = wildtype, NA = not tested
 mutation_matrix <- as.data.frame(mutation_matrix)
 
-# 3.2 Combine all features for FMM
-fmm_input <- cbind(mutation_matrix, blood_matrix, cyto_matrix, type_matrix)
+# 3.2 FMM input (add clinical/cyto features here if desired)
+fmm_input <- mutation_matrix
 
 # Remove columns with all zeros BEFORE scaling
 keep_cols <- colSums(abs(fmm_input), na.rm = TRUE) > 0
@@ -121,7 +121,7 @@ if (any(!is.finite(as.matrix(fmm_input)))) {
 
 message("Fitting Finite Mixture Model (FMM) using mclust...")
 
-fmm_fit <- Mclust(fmm_input, G = 1:8)
+fmm_fit <- Mclust(fmm_input, G = 1:13)
 
 fmm_clusters <- fmm_fit$classification
 df_for_fmm$FMM_cluster <- factor(fmm_clusters)
@@ -153,7 +153,7 @@ colnames(bic_dff) <- c("G",unique(bic_df$Model))
 
 # Save BIC/AIC/loglik values per G
 bic_aic_loglik <- data.frame(
-  G = 1:8,
+  G = 1:13,
   BIC=bic_values,
   AIC = aic_values,
   LogLikelihood = loglik_values 
@@ -162,7 +162,7 @@ bic_aic_logli=list()
 bic_aic_logli$BIC=bic_dff
 bic_aic_logli$AIC = aic_values
 bic_aic_logli$LogLikelihood = loglik_values
-bic_aic_logli$G=1:8
+bic_aic_logli$G=1:13
 
 write.csv(bic_aic_logli, "FMM_BIC_AIC_LogLik.csv", row.names = FALSE)
 
@@ -196,6 +196,43 @@ if(length(unique(fmm_clusters)) > 1) {
 } else {
   message("Silhouette plot not generated: only one cluster detected.")
 }
+
+# =============================================================================
+# SECTION 4c: FMM CLUSTER STABILITY ANALYSIS (SUBSAMPLING & ARI)
+# =============================================================================
+
+if (!requireNamespace("mclust", quietly = TRUE)) install.packages("mclust")
+library(mclust)
+
+set.seed(123)
+n_runs <- 100
+sample_frac <- 0.8
+stability_scores <- numeric(n_runs)
+
+message("Testing FMM cluster stability by subsampling...")
+
+# Use the optimal number of clusters (fmm_fit$G)
+ref_fit <- Mclust(fmm_input, G = fmm_fit$G)
+ref_clusters <- ref_fit$classification
+
+for (i in 1:n_runs) {
+  idx <- sample(1:nrow(fmm_input), size = floor(sample_frac * nrow(fmm_input)))
+  sub_fit <- Mclust(fmm_input[idx, , drop = FALSE], G = fmm_fit$G)
+  # ARI between original clusters and subsample for those patients
+  ari <- adjustedRandIndex(ref_clusters[idx], sub_fit$classification)
+  stability_scores[i] <- ari
+}
+cat(sprintf("\nMean ARI stability over %d subsamples: %.3f\n", n_runs, mean(stability_scores)))
+
+# Plot histogram of ARI scores
+png("FMM_cluster_stability_ARI_hist.png", width = 900, height = 500)
+hist(stability_scores, main = "FMM Cluster Stability (Subsampling ARI)", 
+     xlab = "Adjusted Rand Index", col = "skyblue", breaks = 20)
+abline(v = mean(stability_scores), col = "red", lwd = 2, lty = 2)
+text(mean(stability_scores), max(hist(stability_scores, plot=FALSE)$counts)*0.9, 
+     labels = paste0("Mean ARI = ", round(mean(stability_scores), 2)), 
+     pos = 4, col = "red", font = 2)
+dev.off()
 
 # =============================================================================
 # SECTION 5: VISUALIZATION
@@ -272,6 +309,8 @@ summary_vars <- c(
   "Normal", "Complex", "del(5)", "del(7)", "del(17)", "del(20)", "(+8)", "del(Y)", "Other",
   "Leukemia progression"
 )
+df_for_fmm <- as.data.frame(df_for_fmm) # Force to data.frame
+df_for_fmm <- df_for_fmm[, !duplicated(colnames(df_for_fmm)), drop = FALSE]
 summary_vars <- summary_vars[summary_vars %in% colnames(df_for_fmm)]
 summary_table <- df_for_fmm %>%
   group_by(FMM_cluster) %>%
