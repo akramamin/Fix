@@ -4,8 +4,7 @@
 # Author : Enhanced Analysis Pipeline
 # Created: 2025
 # Purpose: Identify and characterize distinct subpopulations in CMML using 
-#          Finite Mixture Models (FMM) based on baseline NGS, clinical, and 
-#          cytogenetics, and key clinical outcomes. (NO trajectory analysis)
+#          Finite Mixture Models (FMM) based on baseline NGS.
 # 
 # Key Enhancements:
 # - FMM-based clustering (mclust) for baseline mutations
@@ -87,15 +86,15 @@ ngs1_binary_cols <- setdiff(ngs1_cols_all, c(ngs1_vaf_cols, ngs1_type_cols, ngs1
 mutation_matrix <- df[, ..ngs1_binary_cols]
 mutation_matrix[] <- lapply(mutation_matrix, clean_numeric)
 # DO NOT IMPUTE NA for mutation_matrix!
-# 1 = mutated, 0 = wildtype, NA = not tested
+# 1 = mutated, 0 = not mutated, NA = not tested
 mutation_matrix <- as.data.frame(mutation_matrix)
 
-# 3.2 FMM input (add clinical/cyto features here if desired)
-fmm_input <- mutation_matrix
-
 # Remove columns with all zeros BEFORE scaling
-keep_cols <- colSums(abs(fmm_input), na.rm = TRUE) > 0
-fmm_input <- fmm_input[, keep_cols, drop = FALSE]
+keep_cols <- colSums(abs(mutation_matrix), na.rm = TRUE) > 0
+mutation_matrix <- mutation_matrix[, keep_cols, drop = FALSE]
+
+# Now create fmm_input from mutation_matrix
+fmm_input <- mutation_matrix
 
 # Scale all features (mean 0, sd 1)
 fmm_input <- scale(fmm_input)
@@ -121,7 +120,7 @@ if (any(!is.finite(as.matrix(fmm_input)))) {
 
 message("Fitting Finite Mixture Model (FMM) using mclust...")
 
-fmm_fit <- Mclust(fmm_input, G = 1:13)
+fmm_fit <- Mclust(fmm_input, G = 1:18)
 
 fmm_clusters <- fmm_fit$classification
 df_for_fmm$FMM_cluster <- factor(fmm_clusters)
@@ -153,7 +152,7 @@ colnames(bic_dff) <- c("G",unique(bic_df$Model))
 
 # Save BIC/AIC/loglik values per G
 bic_aic_loglik <- data.frame(
-  G = 1:13,
+  G = 1:18,
   BIC=bic_values,
   AIC = aic_values,
   LogLikelihood = loglik_values 
@@ -162,7 +161,7 @@ bic_aic_logli=list()
 bic_aic_logli$BIC=bic_dff
 bic_aic_logli$AIC = aic_values
 bic_aic_logli$LogLikelihood = loglik_values
-bic_aic_logli$G=1:13
+bic_aic_logli$G=1:18
 
 write.csv(bic_aic_logli, "FMM_BIC_AIC_LogLik.csv", row.names = FALSE)
 
@@ -299,6 +298,30 @@ pheatmap(patient_heatmap,
          main = "All Patients - Feature Heatmap by FMM Cluster",
          filename = "FMM_allpatients_heatmap.png", width = 15, height = 8)
 
+# ---------------------------------------------------------
+# 5.6 Centroid Distance Heatmap (Proximity of FMM Clusters)
+# ---------------------------------------------------------
+# Requires: class_means from above (output of aggregate with Class as first column)
+if ("Class" %in% colnames(class_means)) {
+  centroid_matrix <- as.matrix(class_means[,-1]) # Remove the "Class" column
+  rownames(centroid_matrix) <- paste0("C", class_means$Class)
+} else {
+  centroid_matrix <- as.matrix(class_means)
+}
+# Compute Euclidean distances between centroids
+centroid_dist <- dist(centroid_matrix)
+centroid_dist_mat <- as.matrix(centroid_dist)
+# Make heatmap
+pheatmap(
+  centroid_dist_mat,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  color = colorRampPalette(c("blue", "white", "red"))(100),
+  main = "Centroid Distance Heatmap (FMM Clusters)",
+  filename = "FMM_centroid_distance_heatmap.png",
+  width = 8, height = 6
+)
+
 # =============================================================================
 # SECTION 6: CLINICAL/MOLECULAR SUMMARY TABLE BY CLASS
 # =============================================================================
@@ -307,17 +330,32 @@ summary_vars <- c(
   "Age", "Sex", "Diagnosis(subtype)", "BM cellularity", "BM blasts %",
   "WBC(k/ul)", "ANC", "AMC", "Monocyte %", "HB(g/dl)", "PLT(k/ul)",
   "Normal", "Complex", "del(5)", "del(7)", "del(17)", "del(20)", "(+8)", "del(Y)", "Other",
-  "Leukemia progression"
+  "Leukemia progression", "OS months"
 )
-df_for_fmm <- as.data.frame(df_for_fmm) # Force to data.frame
+df_for_fmm <- as.data.frame(df_for_fmm)
 df_for_fmm <- df_for_fmm[, !duplicated(colnames(df_for_fmm)), drop = FALSE]
 summary_vars <- summary_vars[summary_vars %in% colnames(df_for_fmm)]
+
+os_exists <- all(c("OS months") %in% colnames(df_for_fmm))
+
 summary_table <- df_for_fmm %>%
   group_by(FMM_cluster) %>%
-  summarise(across(all_of(summary_vars), ~if (is.numeric(.)) mean(., na.rm=TRUE) else {
-    tab <- table(.)
-    names(tab)[which.max(tab)]
-  }))
+  summarise(
+    Cluster_size = n(),
+    Mean_OS_months = if (os_exists && any(!is.na(`OS months`))) {
+      as.numeric(mean(`OS months`, na.rm = TRUE))
+    } else NA_real_,
+    Median_OS_months = if (os_exists && any(!is.na(`OS months`))) {
+      as.numeric(median(`OS months`, na.rm = TRUE))
+    } else NA_real_,
+    across(all_of(summary_vars), 
+           ~if (is.numeric(.)) mean(., na.rm=TRUE) else {
+             tab <- table(.)
+             names(tab)[which.max(tab)]
+           }
+    )
+  )
+
 write.csv(summary_table, "FMM_cluster_summary_table.csv", row.names = FALSE)
 
 # =============================================================================
