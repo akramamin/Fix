@@ -1,0 +1,77 @@
+# =============================================================================
+# SECTION 1: SETUP AND CONFIGURATION (Packages required for XGBoost + ML workflow)
+# =============================================================================
+required_packages <- c(
+  # data handling & visualization
+  "data.table", "dplyr", "readr", "readxl", "tidyr", "lubridate", "stringr", "forcats", "janitor", "ggplot2", "scales",
+  # caret ecosystem (preprocessing helpers, nearZeroVar, etc.) and ensemble helpers
+  "caret", "ipred", "caretEnsemble",
+  # xgboost and dependencies
+  "xgboost", "Matrix",
+  # tidymodels stack (recipes, rsample, parsnip, workflows, tune, yardstick, dials)
+  "tidymodels",
+  # imputation options
+  "mice", "missForest",
+  # handle class imbalance (SMOTE/other)
+  "themis",
+  # performance metrics & ROC / plotting
+  "pROC", "plotROC", "ROCR",
+  # logistic regression utilities / stepwise selection / calibration / tests
+  "MASS", "ResourceSelection", "tableone",
+  # SHAP / explainability / variable importance / LIME
+  "fastshap", "SHAPforxgboost", "DALEX", "vip", "lime",
+  # parallel processing
+  "doParallel",
+  # additional helpful modelling packages
+  "randomForest", "glmnet", "e1071"
+)
+
+# CRAN mirror (safe default)
+options(repos = c(CRAN = "https://cran.r-project.org/"))
+
+install_if_missing <- function(pkgs) {
+  to_install <- pkgs[!vapply(pkgs, function(x) requireNamespace(x, quietly = TRUE), logical(1))]
+  if (length(to_install)) {
+    message("Installing missing packages: ", paste(to_install, collapse = ", "))
+    install.packages(to_install, dependencies = TRUE, repos = getOption("repos"))
+  }
+  invisible(NULL)
+}
+
+load_packages <- function(pkgs) {
+  for (pkg in pkgs) {
+    success <- suppressWarnings(require(pkg, character.only = TRUE))
+    if (!success) {
+      stop(sprintf("Package '%s' could not be loaded even after installation. Please install manually.", pkg))
+    }
+  }
+}
+
+# Install missing packages and load all
+install_if_missing(required_packages)
+load_packages(required_packages)
+
+# Tidymodels loads many packages; ensure conflicts are handled as you prefer
+if ("tidymodels" %in% required_packages) {
+  library(tidymodels)
+}
+
+# Set up parallel backend for modeling (used by caret/tune/xgboost when configured)
+cores_to_use <- max(1, parallel::detectCores(logical = FALSE) - 1)
+if (cores_to_use > 1) {
+  cl <- parallel::makePSOCKcluster(cores_to_use)
+  doParallel::registerDoParallel(cl)
+  message(sprintf("Registered parallel backend with %d worker(s).", cores_to_use))
+} else {
+  message("Parallel backend not registered (single core detected).")
+}
+
+message("=== XGBoost & ML packages installed and loaded ===")
+
+# Optional: show session info for reproducibility
+message("Session info (package versions):")
+print(utils::sessionInfo()[c("R.version", "platform", "otherPkgs")])
+      - name: Run a multi-line script
+        run: |
+          echo Add other actions to build,
+          echo test, and deploy your project.
